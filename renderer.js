@@ -8,12 +8,12 @@ const path = window.require('path');
 // ─── State ────────────────────────────────────────────────────────────────────
 let stlPath   = null;
 let pngPath   = null;
-let lastProcessedStlPath = null; // for camera persistence
+let lastProcessedStlPath = null;
 
 let faceGroups      = [];
 let selectedIds     = new Set();
 let inputMesh       = null;
-let highlightMeshes = {}; // id -> THREE.Mesh
+let highlightMeshes = {};
 
 // UI
 const btnStl     = document.getElementById('btn-stl');
@@ -28,6 +28,7 @@ const outNameEl  = document.getElementById('out-name');
 const statusEl   = document.getElementById('status');
 const faceInfoEl = document.getElementById('face-info');
 const faceListEl = document.getElementById('face-list');
+const svgBadgeEl = document.getElementById('svg-badge');
 
 // Sliders
 const slScale = document.getElementById('sl-scale');
@@ -44,6 +45,10 @@ slRot.addEventListener('input',   () => { valRot.textContent   = slRot.value + '
 slOx.addEventListener('input',    () => { valOx.textContent    = slOx.value + '%'; onParamChange(); });
 slOy.addEventListener('input',    () => { valOy.textContent    = slOy.value + '%'; onParamChange(); });
 chkPreview.addEventListener('change', () => rebuildHighlights());
+
+function isSVGPattern() {
+  return pngPath && path.extname(pngPath).toLowerCase() === '.svg';
+}
 
 function onParamChange() {
   if (chkPreview.checked) rebuildHighlights();
@@ -70,6 +75,16 @@ function checkReady() {
 function toFileUrl(p) {
   const n = p.replace(/\\/g, '/');
   return encodeURI(n.startsWith('/') ? `file://${n}` : `file:///${n}`);
+}
+
+function updateSVGBadge() {
+  if (!svgBadgeEl) return;
+  if (isSVGPattern()) {
+    svgBadgeEl.textContent = '⬡ SVG extrude mode';
+    svgBadgeEl.style.display = 'inline-block';
+  } else {
+    svgBadgeEl.style.display = 'none';
+  }
 }
 
 // ─── Viewports ────────────────────────────────────────────────────────────────
@@ -133,7 +148,6 @@ function frameTo(camera, controls, scene) {
   controls.update();
 }
 
-// Save / restore output camera state
 function saveCameraState(vp) {
   return {
     position: vp.camera.position.clone(),
@@ -189,9 +203,7 @@ function buildFaceGroups(geometry) {
   return [...groups.values()].filter(g => g.triIndices.length >= 2);
 }
 
-// ─── Preview texture rendering ───────────────────────────────────────────────────
-// Renders the tiled PNG pattern into a canvas and returns a THREE.CanvasTexture
-// projected in UV space (u = face's local U axis, v = face's local V axis).
+// ─── Preview texture rendering ────────────────────────────────────────────────
 const PREVIEW_SZ = 512;
 
 function buildPreviewTexture(patternImgEl, params) {
@@ -201,7 +213,7 @@ function buildPreviewTexture(patternImgEl, params) {
   cv.height = PREVIEW_SZ;
   const ctx = cv.getContext('2d');
 
-  ctx.fillStyle = 'rgba(243,139,168,0.18)'; // faint pink base
+  ctx.fillStyle = 'rgba(243,139,168,0.18)';
   ctx.fillRect(0, 0, PREVIEW_SZ, PREVIEW_SZ);
 
   const tileW = PREVIEW_SZ * scale;
@@ -210,7 +222,6 @@ function buildPreviewTexture(patternImgEl, params) {
   ctx.save();
   ctx.translate(PREVIEW_SZ / 2 + offsetX * tileW, PREVIEW_SZ / 2 + offsetY * tileH);
   ctx.rotate(rotation * Math.PI / 180);
-  // tile enough to cover full canvas at any rotation
   const n = Math.ceil(Math.SQRT2 / scale) + 1;
   for (let row = -n; row <= n; row++) {
     for (let col = -n; col <= n; col++) {
@@ -224,7 +235,35 @@ function buildPreviewTexture(patternImgEl, params) {
   return tex;
 }
 
-// Loads pngPath into an HTMLImageElement (cached)
+// SVG preview: render SVG as an image overlay on selected face
+function buildSVGPreviewTexture(svgUrl, params) {
+  const { scale, rotation, offsetX, offsetY } = params;
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const cv = document.createElement('canvas');
+      cv.width = PREVIEW_SZ; cv.height = PREVIEW_SZ;
+      const ctx = cv.getContext('2d');
+      ctx.fillStyle = 'rgba(166,227,161,0.15)';
+      ctx.fillRect(0, 0, PREVIEW_SZ, PREVIEW_SZ);
+      const tileW = PREVIEW_SZ * scale, tileH = PREVIEW_SZ * scale;
+      ctx.save();
+      ctx.translate(PREVIEW_SZ/2 + offsetX*tileW, PREVIEW_SZ/2 + offsetY*tileH);
+      ctx.rotate(rotation * Math.PI/180);
+      const n = Math.ceil(Math.SQRT2/scale)+1;
+      for (let row=-n;row<=n;row++)
+        for (let col=-n;col<=n;col++)
+          ctx.drawImage(img,(col-0.5)*tileW,(row-0.5)*tileH,tileW,tileH);
+      ctx.restore();
+      const tex = new THREE.CanvasTexture(cv);
+      tex.needsUpdate = true;
+      resolve(tex);
+    };
+    img.onerror = () => resolve(null);
+    img.src = svgUrl;
+  });
+}
+
 let _previewImg = null;
 let _previewImgSrc = null;
 async function getPreviewImg() {
@@ -245,18 +284,15 @@ const MAT_SELECTED = new THREE.MeshBasicMaterial({
   side: THREE.DoubleSide, depthTest: false
 });
 
-// Build overlay geometry for a group, projecting UV coords based on face normal
 function buildGroupOverlayGeo(group, posAttr, offsetLen) {
   const verts = [], uvs = [];
   const nrm    = new THREE.Vector3(group.normal.x, group.normal.y, group.normal.z);
   const offset = nrm.clone().multiplyScalar(offsetLen);
 
-  // Build local UV basis perpendicular to normal
   const up  = Math.abs(nrm.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
   const uDir = new THREE.Vector3().crossVectors(nrm, up).normalize();
   const vDir = new THREE.Vector3().crossVectors(uDir, nrm).normalize();
 
-  // Compute UV bounds first (for normalisation)
   let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
   for (const ti of group.triIndices) {
     for (let k = 0; k < 3; k++) {
@@ -289,7 +325,6 @@ async function rebuildHighlights() {
     : 1;
   const offsetLen = 0.002 * bbLen;
 
-  // Remove old overlays
   Object.values(highlightMeshes).forEach(m => {
     vpInput.scene.remove(m);
     m.geometry.dispose();
@@ -298,23 +333,28 @@ async function rebuildHighlights() {
   highlightMeshes = {};
 
   const usePreview = chkPreview.checked && pngPath;
-  let previewImg = null;
-  if (usePreview) previewImg = await getPreviewImg();
 
   for (const g of faceGroups) {
     if (!selectedIds.has(g.id)) continue;
     const geo = buildGroupOverlayGeo(g, pos, offsetLen);
 
     let mat;
-    if (usePreview && previewImg) {
-      const tex = buildPreviewTexture(previewImg, getTextureParams());
-      mat = new THREE.MeshBasicMaterial({
-        map: tex,
-        transparent: true,
-        opacity: 0.85,
-        side: THREE.DoubleSide,
-        depthTest: false,
-      });
+    if (usePreview) {
+      let tex = null;
+      if (isSVGPattern()) {
+        tex = await buildSVGPreviewTexture(toFileUrl(pngPath), getTextureParams());
+      } else {
+        const img = await getPreviewImg();
+        if (img) tex = buildPreviewTexture(img, getTextureParams());
+      }
+      if (tex) {
+        mat = new THREE.MeshBasicMaterial({
+          map: tex, transparent: true, opacity: 0.85,
+          side: THREE.DoubleSide, depthTest: false,
+        });
+      } else {
+        mat = MAT_SELECTED;
+      }
     } else {
       mat = MAT_SELECTED;
     }
@@ -363,7 +403,8 @@ function updateFaceInfo() {
       .map(id => faceGroups.find(g => g.id === id)?.normal)
       .filter(Boolean)
       .map(axisLabel);
-    faceInfoEl.textContent = `Selected: ${[...new Set(labels)].join(', ')} (${selectedIds.size} face${selectedIds.size > 1 ? 's' : ''})`;
+    const mode = isSVGPattern() ? ' [SVG extrude]' : '';
+    faceInfoEl.textContent = `Selected: ${[...new Set(labels)].join(', ')} (${selectedIds.size} face${selectedIds.size > 1 ? 's' : ''})${mode}`;
   }
 }
 
@@ -378,7 +419,6 @@ function loadSTLIntoViewport(filePath, vp, pickable = false, preserveCamera = fa
       geometry.translate(-center.x, -center.y, -center.z);
       geometry.computeBoundingBox();
 
-      // Save camera before clearing (for output viewport persistence)
       const savedCam = preserveCamera ? saveCameraState(vp) : null;
 
       clearScene(vp.scene);
@@ -409,7 +449,7 @@ function loadSTLIntoViewport(filePath, vp, pickable = false, preserveCamera = fa
   });
 }
 
-// ─── Picking ───────────────────────────────────────────────────────────────────
+// ─── Picking ──────────────────────────────────────────────────────────────────
 const raycaster = new THREE.Raycaster();
 const mouse     = new THREE.Vector2();
 
@@ -430,7 +470,7 @@ function setupPicking(vp) {
 
 setupPicking(vpInput);
 
-// ─── Default paths ───────────────────────────────────────────────────────────────
+// ─── Default paths ────────────────────────────────────────────────────────────
 async function tryLoadDefaults() {
   try {
     const defaults = await ipcRenderer.invoke('get-defaults');
@@ -444,15 +484,16 @@ async function tryLoadDefaults() {
     if (defaults.png) {
       pngPath = defaults.png;
       pngPathEl.textContent = pngPath.split(/[\\/]/).pop();
-      _previewImgSrc = null; // force reload
+      _previewImgSrc = null;
+      updateSVGBadge();
       checkReady();
     }
-  } catch (_) { /* silently skip if samples don't exist */ }
+  } catch (_) {}
 }
 
 tryLoadDefaults();
 
-// ─── Button handlers ─────────────────────────────────────────────────────────────
+// ─── Button handlers ──────────────────────────────────────────────────────────
 btnStl.addEventListener('click', async () => {
   try {
     const p = await ipcRenderer.invoke('open-stl');
@@ -471,10 +512,12 @@ btnPng.addEventListener('click', async () => {
     if (!p) return;
     pngPath = p;
     pngPathEl.textContent = p.split(/[\\/]/).pop();
-    _previewImgSrc = null; // invalidate cache
+    _previewImgSrc = null;
+    updateSVGBadge();
     checkReady();
     if (chkPreview.checked) rebuildHighlights();
-    setStatus('Texture loaded: ' + pngPathEl.textContent, '#a6e3a1');
+    const mode = isSVGPattern() ? 'SVG extrude mode' : 'Texture loaded';
+    setStatus(`${mode}: ${pngPathEl.textContent}`, '#a6e3a1');
   } catch (err) { setStatus('Error: ' + err.message, '#f38ba8'); }
 });
 
@@ -495,17 +538,17 @@ btnClear.addEventListener('click', () => {
 
 btnProcess.addEventListener('click', async () => {
   if (!stlPath || !pngPath || selectedIds.size === 0) {
-    setStatus('Load STL, load texture, and select at least one face.', '#fab387');
+    setStatus('Load STL, load texture/SVG, and select at least one face.', '#fab387');
     return;
   }
   const outputPath = (outNameEl.value || '').trim();
   if (!outputPath) { setStatus('Enter an output filename.', '#fab387'); return; }
 
-  // Persist camera only if we're processing the same input model as last time
   const persistCam = (lastProcessedStlPath === stlPath);
 
   btnProcess.disabled = true;
-  setStatus('Processing...', '#fab387');
+  const mode = isSVGPattern() ? 'Extruding SVG...' : 'Processing...';
+  setStatus(mode, '#fab387');
 
   const selectedGroups = faceGroups
     .filter(g => selectedIds.has(g.id))
@@ -513,7 +556,7 @@ btnProcess.addEventListener('click', async () => {
 
   try {
     const result = await ipcRenderer.invoke('run-carve', {
-      stlPath, pngPath, outputPath,
+      stlPath, pngPath: pngPath, outputPath,
       selectedGroups,
       textureParams: getTextureParams(),
     });
