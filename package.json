@@ -6,7 +6,7 @@
     "start": "electron ."
   },
   "dependencies": {
-    "electron": "^30.0.0",
+    "electron": "^41.2.2",
     "sharp": "^0.33.0",
     "three": "^0.165.0"
   }
