@@ -1,6 +1,8 @@
 'use strict';
 
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const path  = require('path');
+const fs    = require('fs');
 const carve = require('./carve');
 
 let win;
@@ -19,9 +21,19 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => app.quit());
 
+// Default sample paths (relative to app root)
+const DEFAULT_STL = path.join(__dirname, 'samples', 'laubstopp_mesh.stl');
+const DEFAULT_PNG = path.join(__dirname, 'patterns', 'gitter.png');
+
+ipcMain.handle('get-defaults', () => ({
+  stl: fs.existsSync(DEFAULT_STL) ? DEFAULT_STL : null,
+  png: fs.existsSync(DEFAULT_PNG) ? DEFAULT_PNG : null,
+}));
+
 ipcMain.handle('open-stl', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     title: 'Open STL file',
+    defaultPath: fs.existsSync(DEFAULT_STL) ? path.dirname(DEFAULT_STL) : undefined,
     filters: [{ name: 'STL Files', extensions: ['stl'] }],
     properties: ['openFile'],
   });
@@ -31,6 +43,7 @@ ipcMain.handle('open-stl', async () => {
 ipcMain.handle('open-png', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
     title: 'Open texture',
+    defaultPath: fs.existsSync(DEFAULT_PNG) ? path.dirname(DEFAULT_PNG) : undefined,
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
     properties: ['openFile'],
   });

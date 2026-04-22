@@ -14,7 +14,6 @@
       height: 100vh;
       overflow: hidden;
     }
-
     #toolbar {
       display: flex;
       align-items: center;
@@ -63,7 +62,17 @@
     }
     .sep { width: 1px; height: 22px; background: #45475a; flex-shrink: 0; }
 
-    /* sliders row */
+    /* preview checkbox */
+    .check-wrap {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .check-wrap input[type=checkbox] { accent-color: #f5c2e7; width: 13px; height: 13px; cursor: pointer; }
+    .check-wrap span { font-size: 11px; color: #cdd6f4; }
+
     #sliders {
       display: flex;
       align-items: center;
@@ -74,26 +83,10 @@
       flex-shrink: 0;
       flex-wrap: wrap;
     }
-    .slider-group {
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-    .slider-group label {
-      font-size: 11px;
-      color: #a6adc8;
-      min-width: 56px;
-    }
-    .slider-group input[type=range] {
-      width: 100px;
-      accent-color: #89b4fa;
-    }
-    .slider-group .val {
-      font-size: 11px;
-      color: #cdd6f4;
-      min-width: 36px;
-      text-align: right;
-    }
+    .slider-group { display: flex; align-items: center; gap: 6px; }
+    .slider-group label { font-size: 11px; color: #a6adc8; min-width: 56px; }
+    .slider-group input[type=range] { width: 100px; accent-color: #89b4fa; }
+    .slider-group .val { font-size: 11px; color: #cdd6f4; min-width: 36px; text-align: right; }
 
     #status {
       padding: 3px 14px;
@@ -104,14 +97,8 @@
       flex-shrink: 0;
       min-height: 20px;
     }
+    #main { display: flex; flex: 1; overflow: hidden; }
 
-    #main {
-      display: flex;
-      flex: 1;
-      overflow: hidden;
-    }
-
-    /* side panel */
     #side-panel {
       width: 180px;
       flex-shrink: 0;
@@ -131,15 +118,9 @@
       border-bottom: 1px solid #313244;
       flex-shrink: 0;
     }
-    #face-list {
-      flex: 1;
-      overflow-y: auto;
-      padding: 4px 0;
-    }
+    #face-list { flex: 1; overflow-y: auto; padding: 4px 0; }
     .face-item {
-      display: flex;
-      align-items: center;
-      gap: 7px;
+      display: flex; align-items: center; gap: 7px;
       padding: 4px 10px;
       cursor: pointer;
       font-size: 11px;
@@ -147,17 +128,8 @@
       transition: background .1s;
     }
     .face-item:hover { background: #313244; }
-    .face-item.selected {
-      border-left-color: #f38ba8;
-      background: #2a1f2f;
-      color: #f38ba8;
-    }
-    .face-dot {
-      width: 8px; height: 8px;
-      border-radius: 50%;
-      background: #6c7086;
-      flex-shrink: 0;
-    }
+    .face-item.selected { border-left-color: #f38ba8; background: #2a1f2f; color: #f38ba8; }
+    .face-dot { width: 8px; height: 8px; border-radius: 50%; background: #6c7086; flex-shrink: 0; }
     .face-item.selected .face-dot { background: #f38ba8; }
     #side-footer {
       padding: 7px 10px;
@@ -167,49 +139,25 @@
       flex-shrink: 0;
     }
 
-    #viewports {
-      display: flex;
-      flex: 1;
-      overflow: hidden;
-    }
+    #viewports { display: flex; flex: 1; overflow: hidden; }
     .viewport-wrap {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      border-right: 1px solid #313244;
-      position: relative;
+      flex: 1; display: flex; flex-direction: column;
+      border-right: 1px solid #313244; position: relative;
     }
     .viewport-wrap:last-child { border-right: none; }
     .viewport-label {
-      padding: 5px 10px;
-      font-size: 10px;
-      font-weight: 700;
-      letter-spacing: .06em;
-      text-transform: uppercase;
-      color: #6c7086;
-      background: #181825;
-      border-bottom: 1px solid #313244;
-      flex-shrink: 0;
+      padding: 5px 10px; font-size: 10px; font-weight: 700;
+      letter-spacing: .06em; text-transform: uppercase;
+      color: #6c7086; background: #181825;
+      border-bottom: 1px solid #313244; flex-shrink: 0;
     }
-    .viewport {
-      flex: 1;
-      position: relative;
-      overflow: hidden;
-      background: #11111b;
-    }
+    .viewport { flex: 1; position: relative; overflow: hidden; background: #11111b; }
     canvas { display: block; }
-
     #face-info {
-      position: absolute;
-      bottom: 8px;
-      left: 10px;
-      font-size: 11px;
-      color: #f5c2e7;
-      background: rgba(0,0,0,.55);
-      padding: 3px 8px;
-      border-radius: 4px;
-      pointer-events: none;
-      z-index: 2;
+      position: absolute; bottom: 8px; left: 10px;
+      font-size: 11px; color: #f5c2e7;
+      background: rgba(0,0,0,.55); padding: 3px 8px;
+      border-radius: 4px; pointer-events: none; z-index: 2;
     }
   </style>
 
@@ -224,7 +172,6 @@
 </head>
 <body>
 
-<!-- Toolbar -->
 <div id="toolbar">
   <button id="btn-stl">&#128194; Load STL</button>
   <span class="path-badge" id="stl-path">No file</span>
@@ -238,11 +185,14 @@
   <div class="sep"></div>
   <button id="btn-process" disabled>&#9881; Process</button>
   <div class="sep"></div>
-  <label>Selection:</label>
+  <label class="check-wrap">
+    <input type="checkbox" id="chk-preview"/>
+    <span>Preview pattern</span>
+  </label>
+  <div class="sep"></div>
   <button id="btn-clear-sel" style="background:#45475a;color:#cdd6f4">Clear</button>
 </div>
 
-<!-- Sliders -->
 <div id="sliders">
   <div class="slider-group">
     <label>Scale</label>
@@ -269,13 +219,11 @@
 <div id="status">Load an STL file to begin.</div>
 
 <div id="main">
-  <!-- Face list panel -->
   <div id="side-panel">
     <h3>Flat Faces</h3>
     <div id="face-list"></div>
     <div id="side-footer">Click faces in 3D view or list to select. Hold Shift to multi-select.</div>
   </div>
-
   <div id="viewports">
     <div class="viewport-wrap">
       <div class="viewport-label">Input &mdash; click faces to select carve surfaces</div>

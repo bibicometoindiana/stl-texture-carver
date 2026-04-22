@@ -3,16 +3,17 @@ import { STLLoader } from 'three/addons/loaders/STLLoader.js';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 const { ipcRenderer } = window.require('electron');
+const path = window.require('path');
 
 // ─── State ────────────────────────────────────────────────────────────────────
-let stlPath = null;
-let pngPath = null;
+let stlPath   = null;
+let pngPath   = null;
+let lastProcessedStlPath = null; // for camera persistence
 
-// Each entry: { id, normal:{x,y,z}, d:number, triIndices:[], mesh:THREE.Mesh|null }
-let faceGroups   = [];
-let selectedIds  = new Set(); // selected face-group IDs
-let inputMesh    = null;
-let highlightMeshes = {}; // id -> THREE.Mesh overlay
+let faceGroups      = [];
+let selectedIds     = new Set();
+let inputMesh       = null;
+let highlightMeshes = {}; // id -> THREE.Mesh
 
 // UI
 const btnStl     = document.getElementById('btn-stl');
@@ -20,6 +21,7 @@ const btnPng     = document.getElementById('btn-png');
 const btnBrowse  = document.getElementById('btn-browse-out');
 const btnProcess = document.getElementById('btn-process');
 const btnClear   = document.getElementById('btn-clear-sel');
+const chkPreview = document.getElementById('chk-preview');
 const stlPathEl  = document.getElementById('stl-path');
 const pngPathEl  = document.getElementById('png-path');
 const outNameEl  = document.getElementById('out-name');
@@ -37,10 +39,15 @@ const valRot   = document.getElementById('val-rot');
 const valOx    = document.getElementById('val-ox');
 const valOy    = document.getElementById('val-oy');
 
-slScale.addEventListener('input', () => { valScale.textContent = slScale.value + '%'; });
-slRot.addEventListener('input',   () => { valRot.textContent   = slRot.value + '°'; });
-slOx.addEventListener('input',    () => { valOx.textContent    = slOx.value + '%'; });
-slOy.addEventListener('input',    () => { valOy.textContent    = slOy.value + '%'; });
+slScale.addEventListener('input', () => { valScale.textContent = slScale.value + '%'; onParamChange(); });
+slRot.addEventListener('input',   () => { valRot.textContent   = slRot.value + '\u00b0'; onParamChange(); });
+slOx.addEventListener('input',    () => { valOx.textContent    = slOx.value + '%'; onParamChange(); });
+slOy.addEventListener('input',    () => { valOy.textContent    = slOy.value + '%'; onParamChange(); });
+chkPreview.addEventListener('change', () => rebuildHighlights());
+
+function onParamChange() {
+  if (chkPreview.checked) rebuildHighlights();
+}
 
 function getTextureParams() {
   return {
@@ -68,12 +75,12 @@ function toFileUrl(p) {
 // ─── Viewports ────────────────────────────────────────────────────────────────
 function makeViewport(containerId) {
   const container = document.getElementById(containerId);
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  const renderer  = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(window.devicePixelRatio);
   renderer.setSize(container.clientWidth, container.clientHeight);
   container.appendChild(renderer.domElement);
 
-  const scene = new THREE.Scene();
+  const scene  = new THREE.Scene();
   scene.background = new THREE.Color(0x11111b);
 
   const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.01, 10000);
@@ -102,17 +109,22 @@ const loader   = new STLLoader();
 
 function clearScene(scene) {
   const rem = scene.children.filter(c => c.userData.managed);
-  rem.forEach(o => { scene.remove(o); o.geometry?.dispose(); if (Array.isArray(o.material)) o.material.forEach(m=>m.dispose()); else o.material?.dispose(); });
+  rem.forEach(o => {
+    scene.remove(o);
+    o.geometry?.dispose();
+    if (Array.isArray(o.material)) o.material.forEach(m => m.dispose());
+    else o.material?.dispose();
+  });
 }
 
 function frameTo(camera, controls, scene) {
   const box = new THREE.Box3();
   scene.children.filter(c => c.userData.isMesh).forEach(c => box.expandByObject(c));
   if (box.isEmpty()) return;
-  const size = box.getSize(new THREE.Vector3());
+  const size   = box.getSize(new THREE.Vector3());
   const center = box.getCenter(new THREE.Vector3());
   const maxDim = Math.max(size.x, size.y, size.z) || 1;
-  const dist = maxDim * 2.2;
+  const dist   = maxDim * 2.2;
   camera.position.set(center.x + dist, center.y + dist * 0.7, center.z + dist);
   camera.near = Math.max(0.01, maxDim / 1000);
   camera.far  = Math.max(1000, maxDim * 20);
@@ -121,16 +133,32 @@ function frameTo(camera, controls, scene) {
   controls.update();
 }
 
+// Save / restore output camera state
+function saveCameraState(vp) {
+  return {
+    position: vp.camera.position.clone(),
+    target:   vp.controls.target.clone(),
+    near:     vp.camera.near,
+    far:      vp.camera.far,
+  };
+}
+function restoreCameraState(vp, state) {
+  vp.camera.position.copy(state.position);
+  vp.camera.near = state.near;
+  vp.camera.far  = state.far;
+  vp.camera.updateProjectionMatrix();
+  vp.controls.target.copy(state.target);
+  vp.controls.update();
+}
+
 // ─── Face group detection ─────────────────────────────────────────────────────
-// Groups triangles that share the same snapped axis-aligned normal AND
-// the same plane offset (dot(centroid, normal) quantized).
-const NORMAL_SNAP  = 0.2;  // cos threshold for "same direction"
-const PLANE_QUANT  = 4;    // decimal places for plane offset key
+const NORMAL_SNAP = 0.2;
+const PLANE_QUANT = 4;
 
 function buildFaceGroups(geometry) {
-  const pos = geometry.attributes.position;
+  const pos    = geometry.attributes.position;
   const numTris = pos.count / 3;
-  const groups  = new Map(); // key -> { id, normal, d, triIndices }
+  const groups  = new Map();
 
   for (let i = 0; i < numTris; i++) {
     const ai = i * 3, bi = ai + 1, ci = ai + 2;
@@ -138,76 +166,160 @@ function buildFaceGroups(geometry) {
     const b = new THREE.Vector3().fromBufferAttribute(pos, bi);
     const c = new THREE.Vector3().fromBufferAttribute(pos, ci);
 
-    // Raw face normal
-    const ab = new THREE.Vector3().subVectors(b, a);
-    const ac = new THREE.Vector3().subVectors(c, a);
+    const ab  = new THREE.Vector3().subVectors(b, a);
+    const ac  = new THREE.Vector3().subVectors(c, a);
     const raw = new THREE.Vector3().crossVectors(ab, ac).normalize();
 
-    // Snap to nearest axis
     const ax = Math.abs(raw.x), ay = Math.abs(raw.y), az = Math.abs(raw.z);
     let snapped;
     if (ax >= ay && ax >= az)      snapped = new THREE.Vector3(Math.sign(raw.x), 0, 0);
     else if (ay >= ax && ay >= az) snapped = new THREE.Vector3(0, Math.sign(raw.y), 0);
     else                           snapped = new THREE.Vector3(0, 0, Math.sign(raw.z));
 
-    // Only group if the triangle is reasonably aligned (not highly oblique)
     if (raw.dot(snapped) < NORMAL_SNAP) continue;
 
-    // Plane offset: centroid · snapped_normal
     const centroid = new THREE.Vector3().addVectors(a, b).add(c).divideScalar(3);
-    const d = centroid.dot(snapped);
+    const d    = centroid.dot(snapped);
     const dKey = d.toFixed(PLANE_QUANT);
     const key  = `${snapped.x},${snapped.y},${snapped.z}|${dKey}`;
 
-    if (!groups.has(key)) {
-      groups.set(key, { id: key, normal: { x: snapped.x, y: snapped.y, z: snapped.z }, d, triIndices: [] });
-    }
+    if (!groups.has(key)) groups.set(key, { id: key, normal: { x: snapped.x, y: snapped.y, z: snapped.z }, d, triIndices: [] });
     groups.get(key).triIndices.push(i);
   }
-
-  // Filter tiny groups (< 2 triangles)
   return [...groups.values()].filter(g => g.triIndices.length >= 2);
 }
 
-// ─── Highlight overlays ───────────────────────────────────────────────────────
-const MAT_HOVER    = new THREE.MeshBasicMaterial({ color: 0x89b4fa, transparent: true, opacity: 0.35, side: THREE.DoubleSide, depthTest: false });
-const MAT_SELECTED = new THREE.MeshBasicMaterial({ color: 0xf38ba8, transparent: true, opacity: 0.50, side: THREE.DoubleSide, depthTest: false });
+// ─── Preview texture rendering ───────────────────────────────────────────────────
+// Renders the tiled PNG pattern into a canvas and returns a THREE.CanvasTexture
+// projected in UV space (u = face's local U axis, v = face's local V axis).
+const PREVIEW_SZ = 512;
 
+function buildPreviewTexture(patternImgEl, params) {
+  const { scale, rotation, offsetX, offsetY } = params;
+  const cv  = document.createElement('canvas');
+  cv.width  = PREVIEW_SZ;
+  cv.height = PREVIEW_SZ;
+  const ctx = cv.getContext('2d');
+
+  ctx.fillStyle = 'rgba(243,139,168,0.18)'; // faint pink base
+  ctx.fillRect(0, 0, PREVIEW_SZ, PREVIEW_SZ);
+
+  const tileW = PREVIEW_SZ * scale;
+  const tileH = PREVIEW_SZ * scale;
+
+  ctx.save();
+  ctx.translate(PREVIEW_SZ / 2 + offsetX * tileW, PREVIEW_SZ / 2 + offsetY * tileH);
+  ctx.rotate(rotation * Math.PI / 180);
+  // tile enough to cover full canvas at any rotation
+  const n = Math.ceil(Math.SQRT2 / scale) + 1;
+  for (let row = -n; row <= n; row++) {
+    for (let col = -n; col <= n; col++) {
+      ctx.drawImage(patternImgEl, (col - 0.5) * tileW, (row - 0.5) * tileH, tileW, tileH);
+    }
+  }
+  ctx.restore();
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.needsUpdate = true;
+  return tex;
+}
+
+// Loads pngPath into an HTMLImageElement (cached)
+let _previewImg = null;
+let _previewImgSrc = null;
+async function getPreviewImg() {
+  const src = pngPath ? toFileUrl(pngPath) : null;
+  if (!src) return null;
+  if (_previewImgSrc === src && _previewImg) return _previewImg;
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload  = () => { _previewImg = img; _previewImgSrc = src; resolve(img); };
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+// ─── Highlight overlays ───────────────────────────────────────────────────────
+const MAT_SELECTED = new THREE.MeshBasicMaterial({
+  color: 0xf38ba8, transparent: true, opacity: 0.50,
+  side: THREE.DoubleSide, depthTest: false
+});
+
+// Build overlay geometry for a group, projecting UV coords based on face normal
 function buildGroupOverlayGeo(group, posAttr, offsetLen) {
-  const verts = [];
-  const nrm   = new THREE.Vector3(group.normal.x, group.normal.y, group.normal.z);
+  const verts = [], uvs = [];
+  const nrm    = new THREE.Vector3(group.normal.x, group.normal.y, group.normal.z);
   const offset = nrm.clone().multiplyScalar(offsetLen);
 
+  // Build local UV basis perpendicular to normal
+  const up  = Math.abs(nrm.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+  const uDir = new THREE.Vector3().crossVectors(nrm, up).normalize();
+  const vDir = new THREE.Vector3().crossVectors(uDir, nrm).normalize();
+
+  // Compute UV bounds first (for normalisation)
+  let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
   for (const ti of group.triIndices) {
-    const ai = ti * 3;
     for (let k = 0; k < 3; k++) {
-      const v = new THREE.Vector3().fromBufferAttribute(posAttr, ai + k).add(offset);
-      verts.push(v.x, v.y, v.z);
+      const p = new THREE.Vector3().fromBufferAttribute(posAttr, ti * 3 + k);
+      const u = p.dot(uDir), v = p.dot(vDir);
+      if (u < uMin) uMin = u; if (u > uMax) uMax = u;
+      if (v < vMin) vMin = v; if (v > vMax) vMax = v;
+    }
+  }
+  const uRange = (uMax - uMin) || 1, vRange = (vMax - vMin) || 1;
+
+  for (const ti of group.triIndices) {
+    for (let k = 0; k < 3; k++) {
+      const p = new THREE.Vector3().fromBufferAttribute(posAttr, ti * 3 + k).add(offset);
+      verts.push(p.x, p.y, p.z);
+      uvs.push((p.dot(uDir) - uMin) / uRange, (p.dot(vDir) - vMin) / vRange);
     }
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('uv',       new THREE.Float32BufferAttribute(uvs,   2));
   return geo;
 }
 
-function rebuildHighlights() {
+async function rebuildHighlights() {
   if (!inputMesh) return;
-  const pos = inputMesh.geometry.attributes.position;
-  const bbSize = inputMesh.geometry.boundingBox
+  const pos      = inputMesh.geometry.attributes.position;
+  const bbLen    = inputMesh.geometry.boundingBox
     ? inputMesh.geometry.boundingBox.getSize(new THREE.Vector3()).length()
     : 1;
-  const offsetLen = 0.002 * bbSize;
+  const offsetLen = 0.002 * bbLen;
 
-  // Remove old
+  // Remove old overlays
   Object.values(highlightMeshes).forEach(m => {
-    vpInput.scene.remove(m); m.geometry.dispose();
+    vpInput.scene.remove(m);
+    m.geometry.dispose();
+    if (m.material !== MAT_SELECTED) m.material.dispose();
   });
   highlightMeshes = {};
 
+  const usePreview = chkPreview.checked && pngPath;
+  let previewImg = null;
+  if (usePreview) previewImg = await getPreviewImg();
+
   for (const g of faceGroups) {
     if (!selectedIds.has(g.id)) continue;
-    const geo  = buildGroupOverlayGeo(g, pos, offsetLen);
-    const mesh = new THREE.Mesh(geo, MAT_SELECTED);
+    const geo = buildGroupOverlayGeo(g, pos, offsetLen);
+
+    let mat;
+    if (usePreview && previewImg) {
+      const tex = buildPreviewTexture(previewImg, getTextureParams());
+      mat = new THREE.MeshBasicMaterial({
+        map: tex,
+        transparent: true,
+        opacity: 0.85,
+        side: THREE.DoubleSide,
+        depthTest: false,
+      });
+    } else {
+      mat = MAT_SELECTED;
+    }
+
+    const mesh = new THREE.Mesh(geo, mat);
     mesh.userData.managed = true;
     mesh.renderOrder = 1;
     vpInput.scene.add(mesh);
@@ -216,14 +328,10 @@ function rebuildHighlights() {
 }
 
 // ─── Face list sidebar ────────────────────────────────────────────────────────
+const axisLabel = n => n.x ? `${n.x > 0 ? '+' : '-'}X` : n.y ? `${n.y > 0 ? '+' : '-'}Y` : `${n.z > 0 ? '+' : '-'}Z`;
+
 function renderFaceList() {
   faceListEl.innerHTML = '';
-  const axisLabel = n => {
-    if (n.x) return `${n.x > 0 ? '+' : '-'}X`;
-    if (n.y) return `${n.y > 0 ? '+' : '-'}Y`;
-    return `${n.z > 0 ? '+' : '-'}Z`;
-  };
-
   for (const g of faceGroups) {
     const el = document.createElement('div');
     el.className = 'face-item' + (selectedIds.has(g.id) ? ' selected' : '');
@@ -236,17 +344,10 @@ function renderFaceList() {
 
 function toggleFaceGroup(id, shift = false) {
   if (!shift) {
-    // Without shift: if already the only selection, deselect; else select only this
-    if (selectedIds.size === 1 && selectedIds.has(id)) {
-      selectedIds.clear();
-    } else {
-      selectedIds.clear();
-      selectedIds.add(id);
-    }
+    if (selectedIds.size === 1 && selectedIds.has(id)) selectedIds.clear();
+    else { selectedIds.clear(); selectedIds.add(id); }
   } else {
-    // Shift: toggle
-    if (selectedIds.has(id)) selectedIds.delete(id);
-    else selectedIds.add(id);
+    if (selectedIds.has(id)) selectedIds.delete(id); else selectedIds.add(id);
   }
   rebuildHighlights();
   renderFaceList();
@@ -258,14 +359,16 @@ function updateFaceInfo() {
   if (selectedIds.size === 0) {
     faceInfoEl.textContent = 'No face selected';
   } else {
-    const normals = [...selectedIds].map(id => faceGroups.find(g => g.id === id)?.normal).filter(Boolean);
-    const labels  = normals.map(n => n.x ? `${n.x>0?'+':'-'}X` : n.y ? `${n.y>0?'+':'-'}Y` : `${n.z>0?'+':'-'}Z`);
-    faceInfoEl.textContent = `Selected: ${[...new Set(labels)].join(', ')} (${selectedIds.size} face${selectedIds.size>1?'s':''})`;
+    const labels = [...selectedIds]
+      .map(id => faceGroups.find(g => g.id === id)?.normal)
+      .filter(Boolean)
+      .map(axisLabel);
+    faceInfoEl.textContent = `Selected: ${[...new Set(labels)].join(', ')} (${selectedIds.size} face${selectedIds.size > 1 ? 's' : ''})`;
   }
 }
 
 // ─── Load STL ─────────────────────────────────────────────────────────────────
-function loadSTLIntoViewport(filePath, vp, pickable = false) {
+function loadSTLIntoViewport(filePath, vp, pickable = false, preserveCamera = false) {
   return new Promise((resolve, reject) => {
     loader.load(toFileUrl(filePath), geometry => {
       geometry.computeVertexNormals();
@@ -275,19 +378,27 @@ function loadSTLIntoViewport(filePath, vp, pickable = false) {
       geometry.translate(-center.x, -center.y, -center.z);
       geometry.computeBoundingBox();
 
+      // Save camera before clearing (for output viewport persistence)
+      const savedCam = preserveCamera ? saveCameraState(vp) : null;
+
       clearScene(vp.scene);
 
       const mat  = new THREE.MeshPhongMaterial({ color: 0x89b4fa, specular: 0x313244, shininess: 30, side: THREE.DoubleSide });
       const mesh = new THREE.Mesh(geometry, mat);
-      mesh.userData.isMesh   = true;
-      mesh.userData.managed  = true;
+      mesh.userData.isMesh  = true;
+      mesh.userData.managed = true;
       vp.scene.add(mesh);
-      frameTo(vp.camera, vp.controls, vp.scene);
+
+      if (preserveCamera && savedCam) {
+        restoreCameraState(vp, savedCam);
+      } else {
+        frameTo(vp.camera, vp.controls, vp.scene);
+      }
 
       if (pickable) {
-        inputMesh = mesh;
-        faceGroups  = buildFaceGroups(geometry);
-        selectedIds = new Set();
+        inputMesh    = mesh;
+        faceGroups   = buildFaceGroups(geometry);
+        selectedIds  = new Set();
         highlightMeshes = {};
         renderFaceList();
         updateFaceInfo();
@@ -298,7 +409,7 @@ function loadSTLIntoViewport(filePath, vp, pickable = false) {
   });
 }
 
-// ─── Raycaster picking ────────────────────────────────────────────────────────
+// ─── Picking ───────────────────────────────────────────────────────────────────
 const raycaster = new THREE.Raycaster();
 const mouse     = new THREE.Vector2();
 
@@ -311,19 +422,37 @@ function setupPicking(vp) {
     raycaster.setFromCamera(mouse, vp.camera);
     const hits = raycaster.intersectObject(inputMesh, false);
     if (!hits.length) return;
-
-    const triIndex = hits[0].faceIndex; // one triangle index
-    // Find which face group owns this triangle
-    const group = faceGroups.find(g => g.triIndices.includes(triIndex));
+    const group = faceGroups.find(g => g.triIndices.includes(hits[0].faceIndex));
     if (!group) return;
-
     toggleFaceGroup(group.id, e.shiftKey);
   });
 }
 
 setupPicking(vpInput);
 
-// ─── Buttons ──────────────────────────────────────────────────────────────────
+// ─── Default paths ───────────────────────────────────────────────────────────────
+async function tryLoadDefaults() {
+  try {
+    const defaults = await ipcRenderer.invoke('get-defaults');
+    if (defaults.stl) {
+      stlPath = defaults.stl;
+      stlPathEl.textContent = stlPath.split(/[\\/]/).pop();
+      setStatus('Loading default STL...');
+      await loadSTLIntoViewport(stlPath, vpInput, true);
+      setStatus(`STL loaded — ${faceGroups.length} flat faces detected.`, '#a6e3a1');
+    }
+    if (defaults.png) {
+      pngPath = defaults.png;
+      pngPathEl.textContent = pngPath.split(/[\\/]/).pop();
+      _previewImgSrc = null; // force reload
+      checkReady();
+    }
+  } catch (_) { /* silently skip if samples don't exist */ }
+}
+
+tryLoadDefaults();
+
+// ─── Button handlers ─────────────────────────────────────────────────────────────
 btnStl.addEventListener('click', async () => {
   try {
     const p = await ipcRenderer.invoke('open-stl');
@@ -342,7 +471,9 @@ btnPng.addEventListener('click', async () => {
     if (!p) return;
     pngPath = p;
     pngPathEl.textContent = p.split(/[\\/]/).pop();
+    _previewImgSrc = null; // invalidate cache
     checkReady();
+    if (chkPreview.checked) rebuildHighlights();
     setStatus('Texture loaded: ' + pngPathEl.textContent, '#a6e3a1');
   } catch (err) { setStatus('Error: ' + err.message, '#f38ba8'); }
 });
@@ -370,25 +501,27 @@ btnProcess.addEventListener('click', async () => {
   const outputPath = (outNameEl.value || '').trim();
   if (!outputPath) { setStatus('Enter an output filename.', '#fab387'); return; }
 
+  // Persist camera only if we're processing the same input model as last time
+  const persistCam = (lastProcessedStlPath === stlPath);
+
   btnProcess.disabled = true;
   setStatus('Processing...', '#fab387');
 
-  // Collect selected face group data (normal + triangle indices)
   const selectedGroups = faceGroups
     .filter(g => selectedIds.has(g.id))
     .map(g => ({ normal: g.normal, triIndices: g.triIndices }));
 
   try {
     const result = await ipcRenderer.invoke('run-carve', {
-      stlPath,
-      pngPath,
-      outputPath,
+      stlPath, pngPath, outputPath,
       selectedGroups,
       textureParams: getTextureParams(),
     });
     if (!result.ok) { setStatus('Error: ' + result.error, '#f38ba8'); return; }
-    await loadSTLIntoViewport(outputPath, vpOutput, false);
-    setStatus('✓ Saved: ' + outputPath, '#a6e3a1');
+
+    lastProcessedStlPath = stlPath;
+    await loadSTLIntoViewport(outputPath, vpOutput, false, persistCam);
+    setStatus('\u2713 Saved: ' + outputPath, '#a6e3a1');
   } catch (err) {
     setStatus('Processing failed: ' + err.message, '#f38ba8');
   } finally {
