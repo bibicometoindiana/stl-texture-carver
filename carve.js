@@ -108,10 +108,6 @@ function pushQuad(tris,nx,ny,nz,ax,ay,az,bx,by,bz,cx,cy,cz,dx,dy,dz){
 }
 
 // ─── PNG tiling with transform ────────────────────────────────────────────────
-/**
- * Build a 2D black mask (Uint8Array, row-major, GU×GV) by tiling the PNG
- * with scale, rotation (degrees), offsetX/Y (0–1 fractions of tile size).
- */
 async function buildTiledMask(pngPath, GU, GV, textureParams) {
   const { scale, rotation, offsetX, offsetY } = textureParams;
   const meta = await sharp(pngPath).metadata();
@@ -122,21 +118,17 @@ async function buildTiledMask(pngPath, GU, GV, textureParams) {
   const rad  = rotation * Math.PI / 180;
   const cosA = Math.cos(rad), sinA = Math.sin(rad);
 
-  // Effective tile size in grid cells (scale=1 → tile fills GU×GV once)
   const tileW = GU * scale;
   const tileH = GV * scale;
 
   for (let gv = 0; gv < GV; gv++) {
     for (let gu = 0; gu < GU; gu++) {
-      // Normalised coords [0,1]
       const u = gu / GU - 0.5;
       const v = gv / GV - 0.5;
 
-      // Apply rotation
       const ru = cosA * u - sinA * v;
       const rv = sinA * u + cosA * v;
 
-      // Back to [0,1] then apply offset + tile
       const su = (((ru + 0.5) / scale + offsetX) % 1 + 1) % 1;
       const sv = (((rv + 0.5) / scale + offsetY) % 1 + 1) % 1;
 
@@ -148,13 +140,168 @@ async function buildTiledMask(pngPath, GU, GV, textureParams) {
   return mask;
 }
 
+// ─── Vector Tools ─────────────────────────────────────────────────────────────
+/**
+ * Traces the boundary edges of black (1) regions in the mask and assembles
+ * them into ordered polyline paths (each point is a grid corner coordinate).
+ */
+function extractVectorPaths(mask, w, h) {
+  // Build a map of directed edges: for each black pixel, emit the 4 border
+  // half-edges that face a white (or out-of-bounds) neighbour.
+  const edgeMap = new Map(); // "x,y" -> [{x,y}, ...] next endpoints
+
+  const get = (x, y) => (x >= 0 && x < w && y >= 0 && y < h) ? mask[y * w + x] : 0;
+
+  function addEdge(x0, y0, x1, y1) {
+    const key = `${x0},${y0}`;
+    if (!edgeMap.has(key)) edgeMap.set(key, []);
+    edgeMap.get(key).push({ x: x1, y: y1 });
+  }
+
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (get(x, y) !== 1) continue;
+      // Top edge
+      if (get(x, y - 1) === 0) addEdge(x,   y,   x + 1, y);
+      // Right edge
+      if (get(x + 1, y) === 0) addEdge(x + 1, y,   x + 1, y + 1);
+      // Bottom edge
+      if (get(x, y + 1) === 0) addEdge(x + 1, y + 1, x,     y + 1);
+      // Left edge
+      if (get(x - 1, y) === 0) addEdge(x,   y + 1, x,     y);
+    }
+  }
+
+  // Walk edges into continuous polyline paths
+  const paths = [];
+  const visited = new Set();
+
+  for (const [startKey, nexts] of edgeMap.entries()) {
+    const [sx, sy] = startKey.split(',').map(Number);
+    for (let ni = 0; ni < nexts.length; ni++) {
+      const startEdgeId = `${sx},${sy}->${nexts[ni].x},${nexts[ni].y}`;
+      if (visited.has(startEdgeId)) continue;
+
+      const path = [{ x: sx, y: sy }];
+      let cx = sx, cy = sy;
+      let nx = nexts[ni].x, ny = nexts[ni].y;
+
+      for (let safety = 0; safety < (w + h) * 4; safety++) {
+        const eid = `${cx},${cy}->${nx},${ny}`;
+        if (visited.has(eid)) break;
+        visited.add(eid);
+        path.push({ x: nx, y: ny });
+        // Closed loop detection
+        if (nx === sx && ny === sy) break;
+        cx = nx; cy = ny;
+        const neighbours = edgeMap.get(`${cx},${cy}`);
+        if (!neighbours) break;
+        let moved = false;
+        for (const nb of neighbours) {
+          const neid = `${cx},${cy}->${nb.x},${nb.y}`;
+          if (!visited.has(neid)) { nx = nb.x; ny = nb.y; moved = true; break; }
+        }
+        if (!moved) break;
+      }
+
+      if (path.length >= 2) paths.push(path);
+    }
+  }
+  return paths;
+}
+
+/**
+ * Applies Laplacian (average-neighbour) smoothing to each path.
+ * @param {Array<Array<{x,y}>>} paths
+ * @param {number} iterations  0 = no smoothing, 50 = maximum
+ */
+function smoothPaths(paths, iterations) {
+  if (iterations <= 0) return paths;
+  return paths.map(p => {
+    let cur = p;
+    const isClosed = cur.length >= 2 &&
+      cur[0].x === cur[cur.length - 1].x &&
+      cur[0].y === cur[cur.length - 1].y;
+
+    for (let it = 0; it < iterations; it++) {
+      const next = new Array(cur.length);
+      for (let j = 0; j < cur.length; j++) {
+        // Keep endpoints fixed on open paths
+        if (!isClosed && (j === 0 || j === cur.length - 1)) {
+          next[j] = cur[j];
+          continue;
+        }
+        let prev = j - 1, nxt = j + 1;
+        if (isClosed) {
+          if (prev < 0)           prev = cur.length - 2; // skip duplicate closing point
+          if (nxt >= cur.length)  nxt  = 1;
+        }
+        next[j] = {
+          x: cur[j].x * 0.5 + (cur[prev].x + cur[nxt].x) * 0.25,
+          y: cur[j].y * 0.5 + (cur[prev].y + cur[nxt].y) * 0.25,
+        };
+      }
+      // Re-close the loop
+      if (isClosed) next[next.length - 1] = { x: next[0].x, y: next[0].y };
+      cur = next;
+    }
+    return cur;
+  });
+}
+
+/**
+ * Rasterises the smoothed vector paths back into a Uint8Array mask.
+ * Each path segment is drawn as a 1-pixel-wide line using Bresenham's
+ * algorithm; a configurable radius thickens the stroke so narrow paths
+ * still carve a visible groove.
+ * @param {Array<Array<{x,y}>>} paths
+ * @param {number} w  grid width  (GU)
+ * @param {number} h  grid height (GV)
+ * @param {number} radius  stroke half-width in grid cells (default 1)
+ */
+function rasterisePaths(paths, w, h, radius = 1) {
+  const mask = new Uint8Array(w * h);
+  const r = Math.max(0, Math.round(radius));
+
+  function stamp(px, py) {
+    for (let dy = -r; dy <= r; dy++) {
+      for (let dx = -r; dx <= r; dx++) {
+        if (dx * dx + dy * dy <= r * r) {
+          const nx = px + dx, ny = py + dy;
+          if (nx >= 0 && nx < w && ny >= 0 && ny < h) mask[ny * w + nx] = 1;
+        }
+      }
+    }
+  }
+
+  for (const path of paths) {
+    for (let i = 0; i < path.length - 1; i++) {
+      let x0 = Math.round(path[i].x),   y0 = Math.round(path[i].y);
+      let x1 = Math.round(path[i+1].x), y1 = Math.round(path[i+1].y);
+
+      // Bresenham line
+      const adx = Math.abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+      const ady = -Math.abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+      let err = adx + ady;
+      while (true) {
+        stamp(x0, y0);
+        if (x0 === x1 && y0 === y1) break;
+        const e2 = 2 * err;
+        if (e2 >= ady) { err += ady; x0 += sx; }
+        if (e2 <= adx) { err += adx; y0 += sy; }
+      }
+    }
+  }
+  return mask;
+}
+
 // ─── Main export ──────────────────────────────────────────────────────────────
 /**
  * @param {string} stlPath
  * @param {string} pngPath
  * @param {string} outputPath
  * @param {Array<{normal:{x,y,z}, triIndices:number[]}>} selectedGroups
- * @param {{scale,rotation,offsetX,offsetY}} textureParams
+ * @param {{mode,smooth,scale,rotation,offsetX,offsetY}} textureParams
  */
 async function run(stlPath, pngPath, outputPath, selectedGroups, textureParams) {
   const stlBuf    = fs.readFileSync(stlPath);
@@ -162,9 +309,6 @@ async function run(stlPath, pngPath, outputPath, selectedGroups, textureParams) 
   const [x0,y0,z0,x1,y1,z1] = bbox(positions);
   const W=x1-x0, D=y1-y0, H=z1-z0;
 
-  // Determine carve axis from first selected group's normal
-  // (all selected faces should share the same entry direction;
-  //  if multiple normals, we carve along the most common one)
   const normalCounts = new Map();
   for (const g of selectedGroups) {
     const key = `${g.normal.x},${g.normal.y},${g.normal.z}`;
@@ -190,13 +334,10 @@ async function run(stlPath, pngPath, outputPath, selectedGroups, textureParams) 
   const [GX,GY,GZ] = GArr;
 
   // ── Build the face-bounded 2D mask ────────────────────────────────────────
-  // 1. Find which GU×GV cells are covered by the selected face triangles
-  const worldMins = [x0,y0,z0];
+  const worldMins  = [x0,y0,z0];
   const worldSizes = [W,D,H];
-  const cellU = worldSizes[uAxis] / GU;
-  const cellV = worldSizes[vAxis] / GV;
 
-  const faceMask = new Uint8Array(GU * GV); // 1 = covered by selected faces
+  const faceMask = new Uint8Array(GU * GV);
   const allTriSet = new Set();
   for (const g of selectedGroups) g.triIndices.forEach(i => allTriSet.add(i));
 
@@ -207,10 +348,9 @@ async function run(stlPath, pngPath, outputPath, selectedGroups, textureParams) 
       [positions[b+3], positions[b+4], positions[b+5]],
       [positions[b+6], positions[b+7], positions[b+8]],
     ];
-    // Bounding box of this triangle in UV space
     let uMin=Infinity,uMax=-Infinity,vMin=Infinity,vMax=-Infinity;
     for (const v of verts) {
-      const u = (v[uAxis] - worldMins[uAxis]) / worldSizes[uAxis] * GU;
+      const u  = (v[uAxis] - worldMins[uAxis]) / worldSizes[uAxis] * GU;
       const vv = (v[vAxis] - worldMins[vAxis]) / worldSizes[vAxis] * GV;
       if(u<uMin)uMin=u; if(u>uMax)uMax=u;
       if(vv<vMin)vMin=vv; if(vv>vMax)vMax=vv;
@@ -220,10 +360,20 @@ async function run(stlPath, pngPath, outputPath, selectedGroups, textureParams) 
     for (let gv=gv0;gv<=gv1;gv++) for (let gu=gu0;gu<=gu1;gu++) faceMask[gv*GU+gu]=1;
   }
 
-  // 2. Build tiled PNG mask over the whole grid
-  const tiledMask = await buildTiledMask(pngPath, GU, GV, textureParams);
+  // ── Build tiled PNG mask ──────────────────────────────────────────────────
+  let tiledMask = await buildTiledMask(pngPath, GU, GV, textureParams);
 
-  // 3. Combined: carve only where face is selected AND texture is black
+  // ── Vector mode: trace → smooth → rasterise ───────────────────────────────
+  const mode         = textureParams.mode   || 'fill';
+  const smoothAmount = textureParams.smooth !== undefined ? textureParams.smooth : 10;
+
+  if (mode === 'vector') {
+    const rawPaths     = extractVectorPaths(tiledMask, GU, GV);
+    const smoothedPaths = smoothPaths(rawPaths, smoothAmount);
+    tiledMask          = rasterisePaths(smoothedPaths, GU, GV, 1);
+  }
+
+  // ── Combined carve mask ───────────────────────────────────────────────────
   const blackMask = new Uint8Array(GU * GV);
   for (let i=0; i<GU*GV; i++) blackMask[i] = (faceMask[i] && tiledMask[i]) ? 1 : 0;
 
@@ -231,7 +381,6 @@ async function run(stlPath, pngPath, outputPath, selectedGroups, textureParams) 
   const { grid, idx } = voxelizeShell(positions, GX, GY, GZ, x0,y0,z0, x1,y1,z1);
   floodFillExterior(grid, GX, GY, GZ);
 
-  // Apply carve mask
   function getGCoord(gu, gv, gd) {
     const c=[0,0,0]; c[uAxis]=gu; c[vAxis]=gv; c[dAxis]=gd; return c;
   }

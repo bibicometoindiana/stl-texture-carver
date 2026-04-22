@@ -62,7 +62,17 @@
     }
     .sep { width: 1px; height: 22px; background: #45475a; flex-shrink: 0; }
 
-    /* preview checkbox */
+    select {
+      background: #313244;
+      color: #cdd6f4;
+      border: 1px solid #45475a;
+      border-radius: 4px;
+      padding: 3px 6px;
+      font-size: 11px;
+      outline: none;
+    }
+    select:focus { border-color: #89b4fa; }
+
     .check-wrap {
       display: flex;
       align-items: center;
@@ -194,6 +204,18 @@
 </div>
 
 <div id="sliders">
+  <div class="slider-group">
+    <label>Mode</label>
+    <select id="sel-mode">
+      <option value="fill">Raster Fill</option>
+      <option value="vector">Vector Outlines</option>
+    </select>
+  </div>
+  <div class="slider-group" id="smooth-group">
+    <label>Smooth</label>
+    <input type="range" id="sl-smooth" min="0" max="50" value="10" step="1"/>
+    <span class="val" id="val-smooth">10</span>
+  </div>
   <div class="slider-group">
     <label>Scale</label>
     <input type="range" id="sl-scale" min="5" max="500" value="100" step="1"/>

@@ -8,12 +8,12 @@ const path = window.require('path');
 // ─── State ────────────────────────────────────────────────────────────────────
 let stlPath   = null;
 let pngPath   = null;
-let lastProcessedStlPath = null; // for camera persistence
+let lastProcessedStlPath = null;
 
 let faceGroups      = [];
 let selectedIds     = new Set();
 let inputMesh       = null;
-let highlightMeshes = {}; // id -> THREE.Mesh
+let highlightMeshes = {};
 
 // UI
 const btnStl     = document.getElementById('btn-stl');
@@ -29,16 +29,28 @@ const statusEl   = document.getElementById('status');
 const faceInfoEl = document.getElementById('face-info');
 const faceListEl = document.getElementById('face-list');
 
-// Sliders
-const slScale = document.getElementById('sl-scale');
-const slRot   = document.getElementById('sl-rot');
-const slOx    = document.getElementById('sl-ox');
-const slOy    = document.getElementById('sl-oy');
-const valScale = document.getElementById('val-scale');
-const valRot   = document.getElementById('val-rot');
-const valOx    = document.getElementById('val-ox');
-const valOy    = document.getElementById('val-oy');
+// Mode + Sliders
+const selMode   = document.getElementById('sel-mode');
+const slSmooth  = document.getElementById('sl-smooth');
+const valSmooth = document.getElementById('val-smooth');
+const smoothGroup = document.getElementById('smooth-group');
+const slScale   = document.getElementById('sl-scale');
+const slRot     = document.getElementById('sl-rot');
+const slOx      = document.getElementById('sl-ox');
+const slOy      = document.getElementById('sl-oy');
+const valScale  = document.getElementById('val-scale');
+const valRot    = document.getElementById('val-rot');
+const valOx     = document.getElementById('val-ox');
+const valOy     = document.getElementById('val-oy');
 
+// Show/hide smooth slider based on mode
+function updateModeUI() {
+  smoothGroup.style.display = selMode.value === 'vector' ? 'flex' : 'none';
+}
+updateModeUI();
+
+selMode.addEventListener('change', () => { updateModeUI(); onParamChange(); });
+slSmooth.addEventListener('input', () => { valSmooth.textContent = slSmooth.value; onParamChange(); });
 slScale.addEventListener('input', () => { valScale.textContent = slScale.value + '%'; onParamChange(); });
 slRot.addEventListener('input',   () => { valRot.textContent   = slRot.value + '\u00b0'; onParamChange(); });
 slOx.addEventListener('input',    () => { valOx.textContent    = slOx.value + '%'; onParamChange(); });
@@ -51,6 +63,8 @@ function onParamChange() {
 
 function getTextureParams() {
   return {
+    mode:     selMode.value,
+    smooth:   parseInt(slSmooth.value, 10),
     scale:    parseFloat(slScale.value) / 100,
     rotation: parseFloat(slRot.value),
     offsetX:  parseFloat(slOx.value) / 100,
@@ -133,7 +147,6 @@ function frameTo(camera, controls, scene) {
   controls.update();
 }
 
-// Save / restore output camera state
 function saveCameraState(vp) {
   return {
     position: vp.camera.position.clone(),
@@ -189,9 +202,7 @@ function buildFaceGroups(geometry) {
   return [...groups.values()].filter(g => g.triIndices.length >= 2);
 }
 
-// ─── Preview texture rendering ───────────────────────────────────────────────────
-// Renders the tiled PNG pattern into a canvas and returns a THREE.CanvasTexture
-// projected in UV space (u = face's local U axis, v = face's local V axis).
+// ─── Preview texture rendering ────────────────────────────────────────────────
 const PREVIEW_SZ = 512;
 
 function buildPreviewTexture(patternImgEl, params) {
@@ -201,7 +212,7 @@ function buildPreviewTexture(patternImgEl, params) {
   cv.height = PREVIEW_SZ;
   const ctx = cv.getContext('2d');
 
-  ctx.fillStyle = 'rgba(243,139,168,0.18)'; // faint pink base
+  ctx.fillStyle = 'rgba(243,139,168,0.18)';
   ctx.fillRect(0, 0, PREVIEW_SZ, PREVIEW_SZ);
 
   const tileW = PREVIEW_SZ * scale;
@@ -210,7 +221,6 @@ function buildPreviewTexture(patternImgEl, params) {
   ctx.save();
   ctx.translate(PREVIEW_SZ / 2 + offsetX * tileW, PREVIEW_SZ / 2 + offsetY * tileH);
   ctx.rotate(rotation * Math.PI / 180);
-  // tile enough to cover full canvas at any rotation
   const n = Math.ceil(Math.SQRT2 / scale) + 1;
   for (let row = -n; row <= n; row++) {
     for (let col = -n; col <= n; col++) {
@@ -224,7 +234,6 @@ function buildPreviewTexture(patternImgEl, params) {
   return tex;
 }
 
-// Loads pngPath into an HTMLImageElement (cached)
 let _previewImg = null;
 let _previewImgSrc = null;
 async function getPreviewImg() {
@@ -245,18 +254,15 @@ const MAT_SELECTED = new THREE.MeshBasicMaterial({
   side: THREE.DoubleSide, depthTest: false
 });
 
-// Build overlay geometry for a group, projecting UV coords based on face normal
 function buildGroupOverlayGeo(group, posAttr, offsetLen) {
   const verts = [], uvs = [];
   const nrm    = new THREE.Vector3(group.normal.x, group.normal.y, group.normal.z);
   const offset = nrm.clone().multiplyScalar(offsetLen);
 
-  // Build local UV basis perpendicular to normal
   const up  = Math.abs(nrm.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
   const uDir = new THREE.Vector3().crossVectors(nrm, up).normalize();
   const vDir = new THREE.Vector3().crossVectors(uDir, nrm).normalize();
 
-  // Compute UV bounds first (for normalisation)
   let uMin = Infinity, uMax = -Infinity, vMin = Infinity, vMax = -Infinity;
   for (const ti of group.triIndices) {
     for (let k = 0; k < 3; k++) {
@@ -289,7 +295,6 @@ async function rebuildHighlights() {
     : 1;
   const offsetLen = 0.002 * bbLen;
 
-  // Remove old overlays
   Object.values(highlightMeshes).forEach(m => {
     vpInput.scene.remove(m);
     m.geometry.dispose();
@@ -378,7 +383,6 @@ function loadSTLIntoViewport(filePath, vp, pickable = false, preserveCamera = fa
       geometry.translate(-center.x, -center.y, -center.z);
       geometry.computeBoundingBox();
 
-      // Save camera before clearing (for output viewport persistence)
       const savedCam = preserveCamera ? saveCameraState(vp) : null;
 
       clearScene(vp.scene);
@@ -409,7 +413,7 @@ function loadSTLIntoViewport(filePath, vp, pickable = false, preserveCamera = fa
   });
 }
 
-// ─── Picking ───────────────────────────────────────────────────────────────────
+// ─── Picking ──────────────────────────────────────────────────────────────────
 const raycaster = new THREE.Raycaster();
 const mouse     = new THREE.Vector2();
 
@@ -430,7 +434,7 @@ function setupPicking(vp) {
 
 setupPicking(vpInput);
 
-// ─── Default paths ───────────────────────────────────────────────────────────────
+// ─── Default paths ────────────────────────────────────────────────────────────
 async function tryLoadDefaults() {
   try {
     const defaults = await ipcRenderer.invoke('get-defaults');
@@ -444,15 +448,15 @@ async function tryLoadDefaults() {
     if (defaults.png) {
       pngPath = defaults.png;
       pngPathEl.textContent = pngPath.split(/[\\/]/).pop();
-      _previewImgSrc = null; // force reload
+      _previewImgSrc = null;
       checkReady();
     }
-  } catch (_) { /* silently skip if samples don't exist */ }
+  } catch (_) { /* silently skip */ }
 }
 
 tryLoadDefaults();
 
-// ─── Button handlers ─────────────────────────────────────────────────────────────
+// ─── Button handlers ──────────────────────────────────────────────────────────
 btnStl.addEventListener('click', async () => {
   try {
     const p = await ipcRenderer.invoke('open-stl');
@@ -471,7 +475,7 @@ btnPng.addEventListener('click', async () => {
     if (!p) return;
     pngPath = p;
     pngPathEl.textContent = p.split(/[\\/]/).pop();
-    _previewImgSrc = null; // invalidate cache
+    _previewImgSrc = null;
     checkReady();
     if (chkPreview.checked) rebuildHighlights();
     setStatus('Texture loaded: ' + pngPathEl.textContent, '#a6e3a1');
@@ -501,7 +505,6 @@ btnProcess.addEventListener('click', async () => {
   const outputPath = (outNameEl.value || '').trim();
   if (!outputPath) { setStatus('Enter an output filename.', '#fab387'); return; }
 
-  // Persist camera only if we're processing the same input model as last time
   const persistCam = (lastProcessedStlPath === stlPath);
 
   btnProcess.disabled = true;
