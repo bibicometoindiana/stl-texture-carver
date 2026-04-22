@@ -62,7 +62,18 @@
     }
     .sep { width: 1px; height: 22px; background: #45475a; flex-shrink: 0; }
 
-    /* preview checkbox */
+    /* SVG mode badge */
+    #svg-badge {
+      display: none;
+      font-size: 11px;
+      font-weight: 700;
+      background: #a6e3a1;
+      color: #1e1e2e;
+      padding: 3px 8px;
+      border-radius: 4px;
+      white-space: nowrap;
+    }
+
     .check-wrap {
       display: flex;
       align-items: center;
@@ -176,8 +187,9 @@
   <button id="btn-stl">&#128194; Load STL</button>
   <span class="path-badge" id="stl-path">No file</span>
   <div class="sep"></div>
-  <button id="btn-png">&#128444; Load Texture</button>
+  <button id="btn-png">&#128444; Load Texture / SVG</button>
   <span class="path-badge" id="png-path">No file</span>
+  <span id="svg-badge">&#11041; SVG extrude mode</span>
   <div class="sep"></div>
   <label>Output:</label>
   <input type="text" id="out-name" value="output.stl"/>
