@@ -18,23 +18,24 @@
     #toolbar {
       display: flex;
       align-items: center;
-      gap: 10px;
-      padding: 10px 16px;
+      gap: 8px;
+      padding: 8px 14px;
       background: #181825;
       border-bottom: 1px solid #313244;
       flex-shrink: 0;
       flex-wrap: wrap;
     }
-    #toolbar label { font-size: 12px; color: #a6adc8; }
+    #toolbar label { font-size: 11px; color: #a6adc8; white-space: nowrap; }
     button {
-      padding: 6px 14px;
+      padding: 5px 12px;
       border: none;
       border-radius: 6px;
       background: #89b4fa;
       color: #1e1e2e;
       font-weight: 600;
       cursor: pointer;
-      font-size: 13px;
+      font-size: 12px;
+      white-space: nowrap;
     }
     button:hover { background: #74c7ec; }
     button:disabled { background: #45475a; color: #6c7086; cursor: not-allowed; }
@@ -42,34 +43,128 @@
     #btn-process:hover { background: #94e2d5; }
     #btn-process:disabled { background: #45475a; color: #6c7086; }
     input[type="text"] {
-      padding: 6px 10px;
+      padding: 5px 8px;
       border-radius: 6px;
       border: 1px solid #45475a;
       background: #313244;
       color: #cdd6f4;
-      font-size: 13px;
-      width: 220px;
+      font-size: 12px;
+      width: 180px;
     }
     .path-badge {
       font-size: 11px;
       background: #313244;
-      padding: 3px 8px;
+      padding: 3px 7px;
       border-radius: 4px;
-      max-width: 220px;
+      max-width: 160px;
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .sep { width: 1px; height: 24px; background: #45475a; }
+    .sep { width: 1px; height: 22px; background: #45475a; flex-shrink: 0; }
+
+    /* sliders row */
+    #sliders {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 6px 14px;
+      background: #181825;
+      border-bottom: 1px solid #313244;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    .slider-group {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .slider-group label {
+      font-size: 11px;
+      color: #a6adc8;
+      min-width: 56px;
+    }
+    .slider-group input[type=range] {
+      width: 100px;
+      accent-color: #89b4fa;
+    }
+    .slider-group .val {
+      font-size: 11px;
+      color: #cdd6f4;
+      min-width: 36px;
+      text-align: right;
+    }
 
     #status {
-      padding: 4px 16px;
+      padding: 3px 14px;
       font-size: 11px;
       color: #a6adc8;
       background: #181825;
       border-bottom: 1px solid #313244;
       flex-shrink: 0;
-      min-height: 22px;
+      min-height: 20px;
+    }
+
+    #main {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* side panel */
+    #side-panel {
+      width: 180px;
+      flex-shrink: 0;
+      background: #181825;
+      border-right: 1px solid #313244;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    #side-panel h3 {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: .07em;
+      text-transform: uppercase;
+      color: #6c7086;
+      padding: 8px 10px 5px;
+      border-bottom: 1px solid #313244;
+      flex-shrink: 0;
+    }
+    #face-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 4px 0;
+    }
+    .face-item {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font-size: 11px;
+      border-left: 3px solid transparent;
+      transition: background .1s;
+    }
+    .face-item:hover { background: #313244; }
+    .face-item.selected {
+      border-left-color: #f38ba8;
+      background: #2a1f2f;
+      color: #f38ba8;
+    }
+    .face-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #6c7086;
+      flex-shrink: 0;
+    }
+    .face-item.selected .face-dot { background: #f38ba8; }
+    #side-footer {
+      padding: 7px 10px;
+      border-top: 1px solid #313244;
+      font-size: 10px;
+      color: #6c7086;
+      flex-shrink: 0;
     }
 
     #viewports {
@@ -86,10 +181,10 @@
     }
     .viewport-wrap:last-child { border-right: none; }
     .viewport-label {
-      padding: 6px 12px;
-      font-size: 11px;
-      font-weight: 600;
-      letter-spacing: .05em;
+      padding: 5px 10px;
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .06em;
       text-transform: uppercase;
       color: #6c7086;
       background: #181825;
@@ -110,7 +205,7 @@
       left: 10px;
       font-size: 11px;
       color: #f5c2e7;
-      background: rgba(0,0,0,.5);
+      background: rgba(0,0,0,.55);
       padding: 3px 8px;
       border-radius: 4px;
       pointer-events: none;
@@ -129,32 +224,69 @@
 </head>
 <body>
 
+<!-- Toolbar -->
 <div id="toolbar">
-  <button id="btn-stl">📂 Load STL</button>
+  <button id="btn-stl">&#128194; Load STL</button>
   <span class="path-badge" id="stl-path">No file</span>
   <div class="sep"></div>
-  <button id="btn-png">🖼 Load Texture</button>
+  <button id="btn-png">&#128444; Load Texture</button>
   <span class="path-badge" id="png-path">No file</span>
   <div class="sep"></div>
   <label>Output:</label>
   <input type="text" id="out-name" value="output.stl"/>
-  <button id="btn-browse-out">…</button>
+  <button id="btn-browse-out">&#8230;</button>
   <div class="sep"></div>
-  <button id="btn-process" disabled>⚙ Process</button>
+  <button id="btn-process" disabled>&#9881; Process</button>
+  <div class="sep"></div>
+  <label>Selection:</label>
+  <button id="btn-clear-sel" style="background:#45475a;color:#cdd6f4">Clear</button>
+</div>
+
+<!-- Sliders -->
+<div id="sliders">
+  <div class="slider-group">
+    <label>Scale</label>
+    <input type="range" id="sl-scale" min="5" max="500" value="100" step="1"/>
+    <span class="val" id="val-scale">100%</span>
+  </div>
+  <div class="slider-group">
+    <label>Rotation</label>
+    <input type="range" id="sl-rot" min="0" max="360" value="0" step="1"/>
+    <span class="val" id="val-rot">0&deg;</span>
+  </div>
+  <div class="slider-group">
+    <label>Offset X</label>
+    <input type="range" id="sl-ox" min="-100" max="100" value="0" step="1"/>
+    <span class="val" id="val-ox">0%</span>
+  </div>
+  <div class="slider-group">
+    <label>Offset Y</label>
+    <input type="range" id="sl-oy" min="-100" max="100" value="0" step="1"/>
+    <span class="val" id="val-oy">0%</span>
+  </div>
 </div>
 
 <div id="status">Load an STL file to begin.</div>
 
-<div id="viewports">
-  <div class="viewport-wrap">
-    <div class="viewport-label">Input model — click a face to set carve direction</div>
-    <div class="viewport" id="vp-input">
-      <div id="face-info">No face selected</div>
-    </div>
+<div id="main">
+  <!-- Face list panel -->
+  <div id="side-panel">
+    <h3>Flat Faces</h3>
+    <div id="face-list"></div>
+    <div id="side-footer">Click faces in 3D view or list to select. Hold Shift to multi-select.</div>
   </div>
-  <div class="viewport-wrap">
-    <div class="viewport-label">Output model</div>
-    <div class="viewport" id="vp-output"></div>
+
+  <div id="viewports">
+    <div class="viewport-wrap">
+      <div class="viewport-label">Input &mdash; click faces to select carve surfaces</div>
+      <div class="viewport" id="vp-input">
+        <div id="face-info">No face selected</div>
+      </div>
+    </div>
+    <div class="viewport-wrap">
+      <div class="viewport-label">Output</div>
+      <div class="viewport" id="vp-output"></div>
+    </div>
   </div>
 </div>
 

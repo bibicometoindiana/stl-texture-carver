@@ -1,15 +1,14 @@
 'use strict';
 
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
-const path = require('path');
 const carve = require('./carve');
 
 let win;
 
 app.whenReady().then(() => {
   win = new BrowserWindow({
-    width: 1400,
-    height: 800,
+    width: 1500,
+    height: 860,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -19,8 +18,6 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => app.quit());
-
-// ── File dialogs ──────────────────────────────────────────────────────────────
 
 ipcMain.handle('open-stl', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
@@ -33,7 +30,7 @@ ipcMain.handle('open-stl', async () => {
 
 ipcMain.handle('open-png', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-    title: 'Open texture PNG/JPG',
+    title: 'Open texture',
     filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
     properties: ['openFile'],
   });
@@ -49,13 +46,12 @@ ipcMain.handle('save-stl', async (_, defaultName) => {
   return canceled ? null : filePath;
 });
 
-// ── Carve ─────────────────────────────────────────────────────────────────────
-
-ipcMain.handle('run-carve', async (_, { stlPath, pngPath, outputPath, faceNormal }) => {
+ipcMain.handle('run-carve', async (_, { stlPath, pngPath, outputPath, selectedGroups, textureParams }) => {
   try {
-    await carve.run(stlPath, pngPath, outputPath, faceNormal);
+    await carve.run(stlPath, pngPath, outputPath, selectedGroups, textureParams);
     return { ok: true };
   } catch (e) {
+    console.error(e);
     return { ok: false, error: e.message };
   }
 });
