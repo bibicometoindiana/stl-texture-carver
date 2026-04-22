@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>STL Texture Carver</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, sans-serif;
+      background: #1e1e2e;
+      color: #cdd6f4;
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 16px;
+      background: #181825;
+      border-bottom: 1px solid #313244;
+      flex-shrink: 0;
+      flex-wrap: wrap;
+    }
+    #toolbar label { font-size: 12px; color: #a6adc8; }
+    button {
+      padding: 6px 14px;
+      border: none;
+      border-radius: 6px;
+      background: #89b4fa;
+      color: #1e1e2e;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 13px;
+    }
+    button:hover { background: #74c7ec; }
+    button:disabled { background: #45475a; color: #6c7086; cursor: not-allowed; }
+    #btn-process { background: #a6e3a1; }
+    #btn-process:hover { background: #94e2d5; }
+    #btn-process:disabled { background: #45475a; color: #6c7086; }
+    input[type="text"] {
+      padding: 6px 10px;
+      border-radius: 6px;
+      border: 1px solid #45475a;
+      background: #313244;
+      color: #cdd6f4;
+      font-size: 13px;
+      width: 180px;
+    }
+    .path-badge {
+      font-size: 11px;
+      background: #313244;
+      padding: 3px 8px;
+      border-radius: 4px;
+      max-width: 200px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .sep { width: 1px; height: 24px; background: #45475a; }
+
+    #status {
+      padding: 4px 16px;
+      font-size: 11px;
+      color: #a6adc8;
+      background: #181825;
+      border-bottom: 1px solid #313244;
+      flex-shrink: 0;
+      min-height: 22px;
+    }
+
+    #viewports {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+    .viewport-wrap {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid #313244;
+      position: relative;
+    }
+    .viewport-wrap:last-child { border-right: none; }
+    .viewport-label {
+      padding: 6px 12px;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: .05em;
+      text-transform: uppercase;
+      color: #6c7086;
+      background: #181825;
+      border-bottom: 1px solid #313244;
+      flex-shrink: 0;
+    }
+    .viewport {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+      background: #11111b;
+    }
+    canvas { display: block; }
+
+    #face-info {
+      position: absolute;
+      bottom: 8px;
+      left: 10px;
+      font-size: 11px;
+      color: #f5c2e7;
+      background: rgba(0,0,0,.5);
+      padding: 3px 8px;
+      border-radius: 4px;
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="toolbar">
+  <button id="btn-stl">📂 Load STL</button>
+  <span class="path-badge" id="stl-path">No file</span>
+  <div class="sep"></div>
+  <button id="btn-png">🖼 Load Texture</button>
+  <span class="path-badge" id="png-path">No file</span>
+  <div class="sep"></div>
+  <label>Output:</label>
+  <input type="text" id="out-name" value="output.stl"/>
+  <button id="btn-browse-out">…</button>
+  <div class="sep"></div>
+  <button id="btn-process" disabled>⚙ Process</button>
+</div>
+
+<div id="status">Load an STL file to begin.</div>
+
+<div id="viewports">
+  <div class="viewport-wrap">
+    <div class="viewport-label">Input model — click a face to set carve direction</div>
+    <div class="viewport" id="vp-input">
+      <div id="face-info">No face selected</div>
+    </div>
+  </div>
+  <div class="viewport-wrap">
+    <div class="viewport-label">Output model</div>
+    <div class="viewport" id="vp-output"></div>
+  </div>
+</div>
+
+<script src="renderer.js"></script>
+</body>
+</html>

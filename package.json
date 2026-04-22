@@ -1,0 +1,13 @@
+{
+  "name": "stl-carver",
+  "version": "1.0.0",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "dependencies": {
+    "electron": "^30.0.0",
+    "sharp": "^0.33.0",
+    "three": "^0.165.0"
+  }
+}
