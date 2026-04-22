@@ -21,7 +21,6 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => app.quit());
 
-// Default sample paths (relative to app root)
 const DEFAULT_STL = path.join(__dirname, 'samples', 'laubstopp_mesh.stl');
 const DEFAULT_PNG = path.join(__dirname, 'patterns', 'gitter.png');
 
@@ -42,9 +41,13 @@ ipcMain.handle('open-stl', async () => {
 
 ipcMain.handle('open-png', async () => {
   const { canceled, filePaths } = await dialog.showOpenDialog(win, {
-    title: 'Open texture',
+    title: 'Open texture / SVG pattern',
     defaultPath: fs.existsSync(DEFAULT_PNG) ? path.dirname(DEFAULT_PNG) : undefined,
-    filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg'] }],
+    filters: [
+      { name: 'Images & SVG', extensions: ['png', 'jpg', 'jpeg', 'svg'] },
+      { name: 'PNG / JPEG',   extensions: ['png', 'jpg', 'jpeg'] },
+      { name: 'SVG Vector',   extensions: ['svg'] },
+    ],
     properties: ['openFile'],
   });
   return canceled ? null : filePaths[0];
